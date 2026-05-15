@@ -130,7 +130,7 @@ Object dynamics during pushing are a function of (object state, task-space inter
 
 ### Setup
 - **Robots:** Franka Panda (7-DOF) + UR5e (6-DOF) — different joint count, different kinematics, different workspace shapes, but both terminate in a parallel gripper pressing against a table.
-- **Environment:** ManiSkill2 — `PushCube-v1` (GPU-parallelized, 1024 envs simultaneously). Same table, same cube (10cm, 200g), same friction model.
+- **Environment:** ManiSkill3 (GPU-parallelized at 30K+ FPS, supports 20+ robots, same-task-swap-robot via `gym.make(..., robot=...)`, ground-truth object state, contact force data via SAPIEN)
 - **Task:** Push cube to a target position. Randomized: initial cube pose, target pose, robot starting configuration.
 
 ### Data Collection (~30 min wall-clock)
@@ -190,6 +190,18 @@ For matched pushing scenarios (same cube pose, same push direction): cosine simi
 **Fail:** ANY fails → redirect to robot-specific representations.
 
 ### Compute: ~4 hours on 1× A100
+
+### Environment Choice (justified)
+
+| Environment | Same Task × N Robots | GT State | Force/Torque | Speed |
+|---|---|---|---|---|
+| **ManiSkill3** ✅ | ✅ (built-in swap) | ✅ | ✅ (SAPIEN contacts) | 30K+ FPS |
+| Isaac Lab | ✅ (configurable) | ✅ | ✅ (native) | GPU parallel |
+| RoboTwin 2.0 | ✅ (5 platforms) | ✅ | ⚠️ | GPU parallel |
+| MetaWorld ❌ | ❌ (Sawyer only) | ✅ | ⚠️ | CPU |
+| LIBERO ❌ | ❌ (Franka only) | ✅ | ⚠️ | CPU |
+
+ManiSkill3 wins: `gym.make("PickCube-v1", robot="panda")` vs `gym.make("PickCube-v1", robot="ur5e")` — same task, different robots, ground-truth everything.
 
 ---
 
