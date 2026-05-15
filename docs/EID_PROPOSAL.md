@@ -123,46 +123,73 @@ No retraining of the dynamics model. No retraining of the VLA.
 
 ---
 
-## Minimal Experiment
+## The Minimal Experiment
+
+### Core Claim (falsifiable)
+Object dynamics during pushing are a function of (object state, task-space interaction) — NOT of which robot arm is doing the pushing. If true, a single dynamics model should predict object motion from both robots with zero robot-specific adaptation.
 
 ### Setup
-- **Robots:** Franka Panda (7-DOF) + xArm6 (6-DOF) — different DOFs, same gripper type
-- **Held-out robot:** WidowX (4-DOF) — for transfer test
-- **Environment:** ManiSkill3 (SAPIEN simulator, supports all three robots, ground-truth contact data)
-- **Task:** Push object to target pose (3 objects: cube, cylinder, sphere)
-- **Data:** 1000 demonstrations per robot via scripted policy + noise
+- **Robots:** Franka Panda (7-DOF) + UR5e (6-DOF) — different joint count, different kinematics, different workspace shapes, but both terminate in a parallel gripper pressing against a table.
+- **Environment:** ManiSkill2 — `PushCube-v1` (GPU-parallelized, 1024 envs simultaneously). Same table, same cube (10cm, 200g), same friction model.
+- **Task:** Push cube to a target position. Randomized: initial cube pose, target pose, robot starting configuration.
 
-### Protocol
-1. Collect demonstrations from Franka + xArm6
-2. Train contact estimators for both (supervised in sim)
-3. Train shared dynamics model on pooled data
-4. Evaluate: does shared dynamics model predict equally well for both robots?
-5. Transfer test: train WidowX contact estimator on 50 demos. Success rate?
+### Data Collection (~30 min wall-clock)
+- 2000 trajectories per robot via scripted pushing policy
+- Record per timestep: `(object_pose_7D, ee_pose_7D, ee_delta_3D, gripper_state)`
+- ~50 timesteps/trajectory → 100k transitions per robot
 
-### Baselines
-- Per-robot dynamics (same architecture, separate weights)
-- Task-space dynamics (end-effector pose → object pose, fails for different morphologies)
-- Raw VLA (no dynamics model, just joint-space policy)
-- UniAct-style universal action space (no dynamics)
+### Architecture (ALL shared, zero robot-specific parameters)
+```
+object_pose ────▶ Obs Encoder ──▶ z_t ∈ ℝ³² (latent object state)
+ee_pose ────────▶ (shared)
+gripper ────────▶
+
+ee_delta_3D ────▶ Action Encoder ──▶ a ∈ ℝ¹² (latent action)
+(task-space)      (shared)
+
+(z_t, a) ───────▶ Dynamics Model ──▶ z_{t+1}
+                   (shared)
+
+z_{t+1} ────────▶ Obs Decoder ──▶ object_pose_{t+1}
+                   (shared)
+```
+
+**Key:** Action = end-effector delta in task space (Δx, Δy, Δz), NOT joint-space commands. The same Δee produces the same object motion regardless of which arm generated it.
+
+### The Three Models (controlled comparison)
+| Model | Training Data | What it tests |
+|---|---|---|
+| M_Franka | Franka only (2000 traj) | Upper bound on Franka |
+| M_UR5e | UR5e only (2000 traj) | Upper bound on UR5e |
+| M_mixed | Both robots (4000 traj, shuffled) | **The hypothesis: shared dynamics works** |
+
+All three: identical architecture, lr, epochs. Adam, lr=1e-3, 100 epochs, batch 256. ~2 hours on A100.
 
 ### Metrics
-- Object pose prediction MSE (dynamics accuracy)
-- Task success rate (end-to-end)
-- Cross-embodiment transfer gap (shared vs per-robot)
-- Adapter sample efficiency (demos needed for 80% baseline)
 
-### Timeline
-- Days 1-2: Set up ManiSkill3 environments, collect data
-- Days 3-4: Implement contact estimators + dynamics model
-- Day 5: Train and evaluate
-- Day 6: Transfer experiment
-- Day 7: Write up results
+**1. Transfer Ratio (the money metric)**
+```
+Transfer Ratio = MSE_mixed→Franka / MSE_Franka→Franka
+```
+How much performance degrades when using mixed model vs. single-robot model.
 
-### Success Criteria
-- H1: ≤10% prediction error degradation → dynamics invariance holds
-- H2: ≥80% success with 50 demos → transfer efficiency validated
-- If BOTH hold → paper is viable
-- If EITHER fails → learn exactly where invariance breaks → still a valuable negative result
+**2. Wrong-robot baseline (the floor)**
+M_UR5e applied to Franka data. Should FAIL — confirms invariance is non-trivial.
+
+**3. Latent dynamics alignment**
+For matched pushing scenarios (same cube pose, same push direction): cosine similarity of latent transitions across robots. If dynamics are invariant: vectors should be parallel.
+
+### Pre-Registered Success Criteria
+| Criterion | Threshold | Meaning |
+|---|---|---|
+| Transfer Ratio | ≤ 1.15 | Mixed model ≤15% worse than single-robot |
+| Wrong-robot fails | MSE_UR5e→Franka > 2× MSE_Franka→Franka | Robot-specific models DON'T transfer |
+| Latent alignment | Cosine similarity > 0.7 | Shared latent space captures same dynamics |
+
+**Pass:** ALL three met → full-scale training justified.
+**Fail:** ANY fails → redirect to robot-specific representations.
+
+### Compute: ~4 hours on 1× A100
 
 ---
 
